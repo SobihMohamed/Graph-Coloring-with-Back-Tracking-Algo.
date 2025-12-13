@@ -1,0 +1,6 @@
+{
+  "python.analysis.extraPaths": [
+    "./BackTracking/Helper",
+    "./BackTracking/Algo"
+  ]
+}

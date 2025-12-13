@@ -1,0 +1,465 @@
+import tkinter as tk
+from tkinter import messagebox, simpledialog, ttk
+import math
+import random
+import os
+import sys
+import json
+import time
+# Imports for Charts
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from tkinter import ttk 
+
+# Import Performance Analytics
+try:
+    from BackTracking.Performance.PerformanceAnalytics import PerformanceAnalytics
+except ImportError:
+    print("Analytics module not found")
+# --- Setup Paths ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
+# إنشاء فولدر لحفظ الجرافات لو مش موجود
+SAVES_DIR = os.path.join(current_dir, 'SavedGraphs')
+os.makedirs(SAVES_DIR, exist_ok=True)
+
+try:
+    from BackTracking.Algo.backtracking import Backtracking
+    from BackTracking.Helper.helper import Helper
+except ImportError:
+    pass
+
+# --- Config ---
+THEME_BG = "#2C3E50"
+CANVAS_BG = "#FDFFE6"
+NODE_COLOR = "#FFFFFF"
+NODE_BORDER = "#34495E"
+ACCENT_COLOR = "#E67E22"
+
+class GraphColoringUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Graph Coloring Solver - Project Manager Edition")
+        self.root.geometry("1200x800")
+
+        # --- Data ---
+        self.nodes = {} 
+        self.edges = [] 
+        self.adj_list = {}
+        self.node_radius = 20 
+        self.node_counter = 0
+        self.current_mode = "NODE" 
+        self.selected_node = None
+        self.available_colors = self.load_real_colors()
+
+        # --- Layout ---
+        self.sidebar = tk.Frame(root, bg=THEME_BG, width=320)
+        self.sidebar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.sidebar.pack_propagate(False)
+
+        self.canvas = tk.Canvas(root, bg=CANVAS_BG, highlightthickness=0)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.setup_sidebar()
+        self.canvas.bind("<Button-1>", self.handle_click)
+        self.canvas.bind("<Configure>", self.on_resize)
+
+        # تحميل قائمة الملفات المحفوظة عند البدء
+        self.refresh_saved_files()
+
+    def load_real_colors(self):
+        try:
+            path = os.path.join(current_dir, 'BackTracking', 'Colors', 'color.json')
+            with open(path, 'r') as f:
+                data = json.load(f)
+                return data.get("all_colors", [])
+        except:
+            return ["Red", "Green", "Blue", "Yellow", "Orange", "Purple"]
+
+    def setup_sidebar(self):
+        tk.Label(self.sidebar, text="🎮 CONTROL PANEL", bg=THEME_BG, fg="white", font=("Segoe UI", 16, "bold")).pack(pady=20)
+
+        # --- 1. Generator ---
+        gen_frame = tk.LabelFrame(self.sidebar, text="⚡ Smart Generator", bg=THEME_BG, fg=ACCENT_COLOR, font=("Segoe UI", 10, "bold"))
+        gen_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        tk.Label(gen_frame, text="Nodes:", bg=THEME_BG, fg="white").grid(row=0, column=0)
+        self.entry_nodes = tk.Entry(gen_frame, width=4); self.entry_nodes.grid(row=0, column=1)
+        self.entry_nodes.insert(0, "20") 
+        
+        tk.Label(gen_frame, text="Edges:", bg=THEME_BG, fg="white").grid(row=0, column=2)
+        self.entry_edges = tk.Entry(gen_frame, width=4); self.entry_edges.grid(row=0, column=3)
+        self.entry_edges.insert(0, "30")
+        
+        tk.Button(gen_frame, text="🌌 Planets", command=self.generate_random_graph, bg="#27AE60", fg="white", relief="flat").grid(row=0, column=4, padx=5)
+
+        # --- 2. Save / Load Manager (الجزء الجديد) 🔥 ---
+        save_frame = tk.LabelFrame(self.sidebar, text="💾 Project Manager", bg=THEME_BG, fg="#3498DB", font=("Segoe UI", 10, "bold"))
+        save_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        # Save Button
+        tk.Button(save_frame, text="💾 Save Current Graph", command=self.save_graph_to_file, bg="#2980B9", fg="white").pack(fill=tk.X, padx=5, pady=5)
+        
+        # Load Section
+        tk.Label(save_frame, text="Load Saved Graph:", bg=THEME_BG, fg="#BDC3C7", anchor="w").pack(fill=tk.X, padx=5)
+        self.combo_files = ttk.Combobox(save_frame, state="readonly")
+        self.combo_files.pack(fill=tk.X, padx=5, pady=2)
+        
+        tk.Button(save_frame, text="📂 Load Selected", command=self.load_graph_from_file, bg="#34495E", fg="white").pack(fill=tk.X, padx=5, pady=5)
+
+
+        # --- 3. Tools ---
+        tk.Label(self.sidebar, text="🛠️ TOOLS", bg=THEME_BG, fg="#BDC3C7").pack(pady=(10, 2))
+        self.btn_node = self.create_button("📍 Add Node", "NODE")
+        self.btn_edge = self.create_button("🔗 Connect", "EDGE")
+        self.btn_del = self.create_button("🗑️ Delete", "DELETE", color="#C0392B")
+
+        # --- 4. Palette ---
+        tk.Label(self.sidebar, text=f"🎨 PALETTE ({len(self.available_colors)})", bg=THEME_BG, fg="#BDC3C7").pack(pady=(10, 2))
+        palette_frame = tk.Frame(self.sidebar, bg=THEME_BG)
+        palette_frame.pack(pady=5, padx=10, fill=tk.X)
+        row, col = 0, 0
+        for color_name in self.available_colors:
+            try:
+                lbl = tk.Label(palette_frame, bg=color_name.lower(), width=2, height=1, relief="ridge",  borderwidth=1)
+                lbl.grid(row=row, column=col, padx=1, pady=1)
+                col += 1
+                if col > 7: col = 0; row += 1
+            except: pass
+
+        # --- 5. Solve Actions ---
+        tk.Frame(self.sidebar, height=2, bg="grey").pack(fill=tk.X, padx=10, pady=10)
+        tk.Label(self.sidebar, text="Colors Limit:", bg=THEME_BG, fg="white").pack()
+        self.limit_scale = tk.Scale(self.sidebar, from_=1, to=len(self.available_colors), orient=tk.HORIZONTAL, bg=THEME_BG, fg="white", highlightthickness=0)
+        self.limit_scale.set(4)
+        self.limit_scale.pack(fill=tk.X, padx=20)
+
+        tk.Button(self.sidebar, text="🚀 SOLVE", command=self.solve_graph_action, bg=ACCENT_COLOR, fg="white", font=("Arial", 12, "bold"), height=2).pack(fill=tk.X, padx=10, pady=10)
+        tk.Button(self.sidebar, text="🖌️ Reset Colors", command=self.reset_colors, bg="#8E44AD", fg="white").pack(fill=tk.X, padx=10, pady=2)
+        tk.Button(self.sidebar, text="🧹 Clear All", command=self.clear_canvas, bg="#7F8C8D", fg="white").pack(fill=tk.X, padx=10, pady=5)
+
+        self.log_lbl = tk.Label(self.sidebar, text="Ready.", bg="#34495E", fg="#2ECC71", anchor="w", padx=5)
+        self.log_lbl.pack(side=tk.BOTTOM, fill=tk.X)
+
+    def refresh_saved_files(self):
+        """ تحديث القائمة بأسماء الملفات الموجودة """
+        files = [f for f in os.listdir(SAVES_DIR) if f.endswith('.json')]
+        self.combo_files['values'] = files
+        if files:
+            self.combo_files.current(0) # اختار اول واحد اوتوماتيك
+
+    def save_graph_to_file(self):
+        """ حفظ الجراف الحالي في ملف JSON """
+        if not self.nodes:
+            messagebox.showwarning("Save Error", "Canvas is empty!")
+            return
+
+        # نطلب اسم الملف من اليوزر
+        filename = simpledialog.askstring("Save Graph", "Enter graph name (without .json):")
+        if not filename: return # لو داس Cancel
+
+        # تجهيز الداتا للحفظ
+        save_data = {
+            "nodes": {},
+            "adj_list": self.adj_list
+        }
+        
+        # لازم نحفظ الاحداثيات (x, y) عشان لما نرجعه يترسم في نفس المكان
+        for nid, data in self.nodes.items():
+            save_data["nodes"][nid] = {
+                "x": data['x'],
+                "y": data['y']
+            }
+
+        try:
+            full_path = os.path.join(SAVES_DIR, f"{filename}.json")
+            with open(full_path, 'w') as f:
+                json.dump(save_data, f, indent=4)
+            
+            messagebox.showinfo("Success", f"Graph saved as {filename}.json")
+            self.refresh_saved_files() # تحديث القائمة
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save: {e}")
+
+    def load_graph_from_file(self):
+        """ استرجاع الجراف من الملف ورسمه """
+        selected_file = self.combo_files.get()
+        if not selected_file: return
+
+        try:
+            full_path = os.path.join(SAVES_DIR, selected_file)
+            with open(full_path, 'r') as f:
+                data = json.load(f)
+
+            self.clear_canvas() # امسح القديم الاول
+
+            # 1. Recreate Nodes
+            saved_nodes = data.get("nodes", {})
+            for nid_str, coords in saved_nodes.items():
+                x, y = coords['x'], coords['y']
+                # بنستخدم الدالة القديمة بس بنعدل ال node_counter عشان يظبط ال ID
+                # (تريكه بسيطة: بنرسم ونعدل ال ID يدويا لضمان التطابق)
+                self.add_node_from_load(int(nid_str), x, y)
+            
+            # تحديث العداد عشان لو ضاف نودز جديدة مياخدوش ID موجود
+            if saved_nodes:
+                self.node_counter = max([int(k) for k in saved_nodes.keys()]) + 1
+            else:
+                self.node_counter = 0
+
+            # 2. Recreate Edges
+            # ال adj_list المحفوظة ممكن يكون فيها تكرار (undirected)، فلازم ناخد بالنا
+            saved_adj = data.get("adj_list", {})
+            for u_str, neighbors in saved_adj.items():
+                u = int(u_str)
+                for v_str in neighbors:
+                    v = int(v_str)
+                    # عشان منرسمش الخط مرتين، نرسم بس لو u < v
+                    if u < v: 
+                        # نتأكد ان النودز موجودة
+                        if u in self.nodes and v in self.nodes:
+                            self.add_edge_visual(u, v)
+
+            self.log_status(f"Loaded {selected_file}")
+
+        except Exception as e:
+            messagebox.showerror("Load Error", f"Failed to load file: {e}")
+
+    def add_node_from_load(self, nid, x, y):
+        """ دالة مساعدة خاصة بال Load عشان تحافظ على ال IDs القديمة """
+        r = 20 if len(self.nodes) < 25 else 15
+        oval = self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=NODE_COLOR, outline=NODE_BORDER, width=2)
+        font_size = 10 if r >= 20 else 8
+        text = self.canvas.create_text(x, y, text=str(nid), font=("Arial", font_size, "bold"))
+        
+        self.nodes[nid] = {'x': x, 'y': y, 'oval': oval, 'text': text}
+        self.adj_list[str(nid)] = []
+
+    def generate_random_graph(self):
+        self.clear_canvas()
+        try:
+            total_n = int(self.entry_nodes.get())
+            total_e = int(self.entry_edges.get())
+        except: return
+        
+        main_cluster_size = int(total_n * 0.6)
+        side_cluster_1_size = int(total_n * 0.2)
+        side_cluster_2_size = total_n - main_cluster_size - side_cluster_1_size
+        clusters = [main_cluster_size, side_cluster_1_size, side_cluster_2_size]
+        
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        padding = 100
+        safe_w = w - (2 * padding)
+        safe_h = h - (2 * padding)
+        min_dim = min(safe_w, safe_h)
+
+        main_radius = min_dim * 0.35 
+        center_main = (w//2, h//2, main_radius)
+        side_radius = min_dim * 0.15
+        center_side1 = (padding + side_radius, padding + side_radius, side_radius)
+        center_side2 = (w - padding - side_radius, h - padding - side_radius, side_radius)
+        centers = [center_main, center_side1, center_side2]
+        
+        cluster_nodes_ids = []
+        for i, size in enumerate(clusters):
+            cx, cy, radius = centers[i]
+            current_ids = []
+            if size == 0: continue
+            for j in range(size):
+                angle = 2 * math.pi * j / size
+                spread = random.uniform(0.85, 1.15) 
+                nx = cx + (radius * spread) * math.cos(angle)
+                ny = cy + (radius * spread) * math.sin(angle)
+                nx = max(20, min(w-20, nx))
+                ny = max(20, min(h-20, ny))
+                self.add_node_visual(nx, ny)
+                current_ids.append(self.node_counter - 1)
+            cluster_nodes_ids.append(current_ids)
+        
+        edges_per_cluster = [int(total_e * 0.7), int(total_e * 0.15), int(total_e * 0.15)]
+        for i, cluster_ids in enumerate(cluster_nodes_ids):
+            if len(cluster_ids) < 2: continue
+            target_edges = min(edges_per_cluster[i], len(cluster_ids)*(len(cluster_ids)-1)//2)
+            count = 0; attempts = 0
+            while count < target_edges and attempts < 2000:
+                u, v = random.sample(cluster_ids, 2)
+                if str(v) not in self.adj_list.get(str(u), []):
+                    self.add_edge_visual(u, v)
+                    count += 1
+                attempts += 1
+        self.log_status(f"Generated Planetary Graph ({total_n} Nodes)")
+
+    def animate_coloring(self, solution):
+        total_nodes = len(solution)
+        used_colors = set()
+        delay = 0.2
+        for node_str_id, color_name in solution.items():
+            try:
+                node_id = int(node_str_id)
+                if node_id in self.nodes:
+                    oval = self.nodes[node_id]['oval']
+                    self.canvas.itemconfig(oval, fill=color_name.lower(), width=3) 
+                    used_colors.add(color_name)
+                    self.root.update()
+                    time.sleep(delay) 
+            except: pass
+        messagebox.showinfo("Done", f"Coloring Finished! 🎨\nUsed {len(used_colors)} colors.")
+
+    def add_node_visual(self, x, y):
+        node_id = self.node_counter
+        self.node_counter += 1
+        r = 20 if self.node_counter < 30 else 15
+        oval = self.canvas.create_oval(x-r, y-r, x+r, y+r, fill=NODE_COLOR, outline=NODE_BORDER, width=2)
+        font_size = 10 if r >= 20 else 8
+        text = self.canvas.create_text(x, y, text=str(node_id), font=("Arial", font_size, "bold"))
+        self.nodes[node_id] = {'x': x, 'y': y, 'oval': oval, 'text': text}
+        self.adj_list[str(node_id)] = []
+
+    def add_edge_visual(self, u, v):
+        u_str, v_str = str(u), str(v)
+        if u == v: return
+        x1, y1 = self.nodes[u]['x'], self.nodes[u]['y']
+        x2, y2 = self.nodes[v]['x'], self.nodes[v]['y']
+        line = self.canvas.create_line(x1, y1, x2, y2, fill="#95A5A6", width=2)
+        self.canvas.tag_lower(line)
+        self.edges.append((u, v, line))
+        if u_str not in self.adj_list: self.adj_list[u_str] = []
+        if v_str not in self.adj_list: self.adj_list[v_str] = []
+        if v_str not in self.adj_list[u_str]: self.adj_list[u_str].append(v_str)
+        if u_str not in self.adj_list[v_str]: self.adj_list[v_str].append(u_str)
+
+    def delete_node(self, nid):
+        self.canvas.delete(self.nodes[nid]['oval'])
+        self.canvas.delete(self.nodes[nid]['text'])
+        del self.nodes[nid]
+        if str(nid) in self.adj_list: del self.adj_list[str(nid)]
+    
+    def clear_canvas(self):
+        self.canvas.delete("all")
+        self.nodes = {}
+        self.edges = []
+        self.adj_list = {}
+        self.node_counter = 0
+
+    def reset_colors(self):
+        for nid, data in self.nodes.items():
+            self.canvas.itemconfig(data['oval'], fill=NODE_COLOR, width=2)
+
+    def get_clicked_node(self, x, y):
+        for nid, data in self.nodes.items():
+            if math.hypot(x-data['x'], y-data['y']) <= 25: return nid
+        return None
+
+    def handle_click(self, event):
+        x, y = event.x, event.y
+        clicked = self.get_clicked_node(x, y)
+        if self.current_mode == "NODE" and clicked is None: self.add_node_visual(x, y)
+        elif self.current_mode == "EDGE" and clicked is not None:
+            if self.selected_node is None:
+                self.selected_node = clicked
+                self.canvas.itemconfig(self.nodes[clicked]['oval'], outline=ACCENT_COLOR, width=3)
+            else:
+                self.add_edge_visual(self.selected_node, clicked)
+                self.canvas.itemconfig(self.nodes[self.selected_node]['oval'], outline=NODE_BORDER, width=2)
+                self.selected_node = None
+        elif self.current_mode == "DELETE" and clicked is not None:
+            self.delete_node(clicked)
+
+    def solve_graph_action(self):
+        if not self.nodes: return
+        self.reset_colors() 
+        graph_data = self.adj_list.copy()
+        for nid in self.nodes:
+            if str(nid) not in graph_data: graph_data[str(nid)] = []
+        limit = self.limit_scale.get()
+        selected_colors = self.available_colors[:limit]
+        if not Helper.is_graph_connected(graph_data):
+            messagebox.showinfo("Smart Layout", "Disconnected Graph Detected!")
+            
+        analytics = PerformanceAnalytics()
+        solver = Backtracking(graph_data, selected_colors, analytics=analytics)
+        solution = solver.start_solving()
+        if solution:
+            self.animate_coloring(solution)
+            self.show_dashboard(analytics)
+        else:
+            messagebox.showerror("Failed", f"Need more than {limit} colors!")
+            self.show_dashboard(analytics)
+    
+    def create_button(self, text, mode, color="#34495E"):
+        btn = tk.Button(self.sidebar, text=text, bg=color, fg="white", relief="flat", padx=10, pady=5,
+                        command=lambda: self.set_mode(mode, btn))
+        btn.pack(fill=tk.X, padx=15, pady=2)
+        if mode == "NODE": self.active_btn = btn 
+        return btn
+    
+    def set_mode(self, mode, btn_ref):
+        self.current_mode = mode
+        self.btn_node.config(bg="#34495E"); self.btn_edge.config(bg="#34495E"); self.btn_del.config(bg="#C0392B")
+        if mode != "DELETE": btn_ref.config(bg=ACCENT_COLOR)
+        else: btn_ref.config(bg="#E74C3C")
+        self.selected_node = None
+    
+    def log_status(self, msg): self.log_lbl.config(text=f">> {msg}")
+    
+    def on_resize(self, event): pass
+
+    def show_dashboard(self, analytics):
+        # 1. نافذة جديدة (Popup)
+        dash = tk.Toplevel(self.root)
+        dash.title("📊 Performance Analytics Dashboard")
+        dash.geometry("750x550")
+        dash.configure(bg="white")
+
+        # 2. رسم الشارت (Bar Chart)
+        # بنقارن عدد النودز اللي زورناها بعدد المرات اللي رجعنا فيها
+        fig = Figure(figsize=(5, 3), dpi=100)
+        ax = fig.add_subplot(111)
+        
+        metrics = ['Search Space\n(Nodes Visited)', 'Pruning Operations\n(Backtracks)']
+        values = [analytics.nodes_visited, analytics.backtracks_count]
+        colors = ['#3498DB', '#E74C3C'] # أزرق وأحمر
+
+        bars = ax.bar(metrics, values, color=colors, width=0.5)
+        ax.set_title('Backtracking Efficiency Analysis', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Count')
+        
+        # كتابة الأرقام فوق العواميد
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{int(height)}', ha='center', va='bottom')
+
+        # دمج الرسمة في النافذة
+        canvas_widget = FigureCanvasTkAgg(fig, master=dash)
+        canvas_widget.draw()
+        canvas_widget.get_tk_widget().pack(pady=10, fill=tk.BOTH, expand=True)
+
+        # 3. رسم الجدول (تفاصيل الأرقام)
+        table_frame = tk.Frame(dash)
+        table_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        columns = ("Metric", "Value")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=4)
+        
+        tree.heading("Metric", text="Metric")
+        tree.heading("Value", text="Value")
+        tree.column("Metric", anchor="center"); tree.column("Value", anchor="center")
+
+        # تعبئة البيانات
+        status = "✅ Success" if analytics.solution_found else "❌ Failed"
+        tree.insert("", tk.END, values=("Algorithm Status", status))
+        tree.insert("", tk.END, values=("Execution Time", f"{analytics.execution_time_ms:.4f} ms"))
+        tree.insert("", tk.END, values=("Total Recursive Calls", analytics.nodes_visited))
+        tree.insert("", tk.END, values=("Backtracks (Dead Ends)", analytics.backtracks_count))
+
+        tree.pack(fill=tk.X)
+
+        tk.Button(dash, text="Close Report", command=dash.destroy, bg="#2C3E50", fg="white").pack(pady=10)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = GraphColoringUI(root)
+    root.mainloop()
