@@ -2,10 +2,42 @@ class Backtracking:
     def __init__(self, graph, colors_list, analytics=None):
         self.graph = graph
         self.colors = colors_list
-        self.nodes = list(graph.keys())
+        self.nodes = self.get_connected_order(graph)
         self.solution = {}
         self.analytics = analytics
 
+    def get_connected_order(self, graph):
+        if not graph:
+            return []
+            
+        # ترتيب المفاتيح عشان نضمن البداية من الأصغر
+        sorted_keys = sorted(list(graph.keys()), key=lambda x: int(x))
+        
+        visited = set()
+        ordered_nodes = []
+        
+        # دالة مساعدة للـ DFS (Recursive)
+        def dfs_visit(u):
+            visited.add(u)
+            ordered_nodes.append(u)
+            
+            # هات الجيران ورتبهم
+            neighbors = graph.get(u, [])
+            # رتبهم عشان نمشي بالترتيب الصغير للكبير جوه الفرع
+            neighbors = sorted(neighbors, key=lambda x: int(x))
+            
+            for v in neighbors:
+                if v not in visited:
+                    dfs_visit(v)
+
+        # اللوب عشان لو الجراف مفصول (Disconnected)
+        for start_node in sorted_keys:
+            if start_node not in visited:
+                dfs_visit(start_node)
+                            
+        return ordered_nodes
+    
+    
     # ! Standard Backtracking
     def is_safe(self, node, color):
         for neighbor in self.graph.get(node, []):
@@ -37,7 +69,6 @@ class Backtracking:
         return False
 
     #! Optimized Backtracking
-    
     def get_valid_colors(self, node):
         neighbors = self.graph.get(node, [])
         forbidden = {self.solution[n] for n in neighbors if n in self.solution}
